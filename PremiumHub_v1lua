@@ -1,0 +1,509 @@
+-- ==========================================
+-- 👑 PREMIUM HUB UI/UX REDESIGN
+-- ==========================================
+
+local CoreGui = game:GetService("CoreGui")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local localPlayer = Players.LocalPlayer
+
+-- تحديد مسار الحفظ الآمن
+local targetParent = pcall(function() return CoreGui.Name end) and CoreGui or localPlayer:WaitForChild("PlayerGui")
+
+if targetParent:FindFirstChild("PremiumHackHub") then
+    targetParent.PremiumHackHub:Destroy()
+end
+
+-- ==========================================
+-- المتغيرات الأساسية للسكربت
+-- ==========================================
+local savedCFrame = nil
+local flying = false
+local flySpeed = 2.5
+local scriptRunning = true
+local isMinimized = false
+local isTeleporting = false
+local autoReturnEnabled = false
+local autoReturnDistance = 50
+
+-- ==========================================
+-- إعدادات الألوان (Theme)
+-- ==========================================
+local Theme = {
+    Background = Color3.fromRGB(15, 15, 20),
+    Sidebar = Color3.fromRGB(20, 20, 28),
+    ElementBg = Color3.fromRGB(28, 28, 38),
+    Accent = Color3.fromRGB(114, 137, 218), -- لون الديسكورد البنفسجي الأنيق
+    Success = Color3.fromRGB(46, 204, 113),
+    Danger = Color3.fromRGB(231, 76, 60),
+    TextPrimary = Color3.fromRGB(255, 255, 255),
+    TextSecondary = Color3.fromRGB(170, 170, 180)
+}
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "PremiumHackHub"
+ScreenGui.Parent = targetParent
+ScreenGui.ResetOnSpawn = false
+
+-- ==========================================
+-- 1. شاشة التحميل السينمائية
+-- ==========================================
+local blurEffect = Instance.new("BlurEffect", Lighting)
+blurEffect.Size = 0
+
+local function safeTeleport(targetCFrame)
+    if isTeleporting then return end
+    isTeleporting = true
+
+    local character = localPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root then isTeleporting = false return end
+
+    local overlay = Instance.new("Frame", ScreenGui)
+    overlay.Size = UDim2.new(1, 0, 1, 0)
+    overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    overlay.BackgroundTransparency = 1
+    overlay.ZIndex = 100
+
+    local loadCard = Instance.new("Frame", overlay)
+    loadCard.Size = UDim2.new(0, 280, 0, 100)
+    loadCard.Position = UDim2.new(0.5, -140, 0.5, -30)
+    loadCard.BackgroundColor3 = Theme.Sidebar
+    loadCard.BackgroundTransparency = 1
+    loadCard.ZIndex = 101
+    Instance.new("UICorner", loadCard).CornerRadius = UDim.new(0, 12)
+    
+    local stroke = Instance.new("UIStroke", loadCard)
+    stroke.Color = Theme.Accent
+    stroke.Transparency = 1
+
+    local title = Instance.new("TextLabel", loadCard)
+    title.Size = UDim2.new(1, 0, 0, 50)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBlack
+    title.Text = "🚀 جاري النقل الآمن..."
+    title.TextColor3 = Theme.TextPrimary
+    title.TextSize = 18
+    title.TextTransparency = 1
+    title.ZIndex = 102
+
+    local barBg = Instance.new("Frame", loadCard)
+    barBg.Size = UDim2.new(0.8, 0, 0, 6)
+    barBg.Position = UDim2.new(0.1, 0, 0.6, 0)
+    barBg.BackgroundColor3 = Theme.ElementBg
+    barBg.BackgroundTransparency = 1
+    barBg.ZIndex = 102
+    Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
+
+    local barFill = Instance.new("Frame", barBg)
+    barFill.Size = UDim2.new(0, 0, 1, 0)
+    barFill.BackgroundColor3 = Theme.Accent
+    barFill.ZIndex = 103
+    Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
+
+    -- الأنيميشن
+    TweenService:Create(blurEffect, TweenInfo.new(0.5), {Size = 20}):Play()
+    TweenService:Create(overlay, TweenInfo.new(0.5), {BackgroundTransparency = 0.5}):Play()
+    TweenService:Create(loadCard, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position = UDim2.new(0.5, -140, 0.5, -50), BackgroundTransparency = 0}):Play()
+    TweenService:Create(stroke, TweenInfo.new(0.5), {Transparency = 0}):Play()
+    TweenService:Create(title, TweenInfo.new(0.5), {TextTransparency = 0}):Play()
+    TweenService:Create(barBg, TweenInfo.new(0.5), {BackgroundTransparency = 0}):Play()
+    
+    TweenService:Create(barFill, TweenInfo.new(1.2, Enum.EasingStyle.Sine), {Size = UDim2.new(1, 0, 1, 0)}):Play()
+
+    local safePlatform = Instance.new("Part", workspace)
+    safePlatform.Size = Vector3.new(20, 1, 20)
+    safePlatform.Position = targetCFrame.Position - Vector3.new(0, 3.5, 0)
+    safePlatform.Anchored = true
+    safePlatform.Transparency = 1 
+
+    root.CFrame = targetCFrame
+    root.Anchored = true
+
+    task.delay(1.5, function()
+        if root then root.Anchored = false end
+        if safePlatform then safePlatform:Destroy() end
+        
+        TweenService:Create(blurEffect, TweenInfo.new(0.5), {Size = 0}):Play()
+        TweenService:Create(overlay, TweenInfo.new(0.5), {BackgroundTransparency = 1}):Play()
+        TweenService:Create(loadCard, TweenInfo.new(0.4), {Position = UDim2.new(0.5, -140, 0.5, -20), BackgroundTransparency = 1}):Play()
+        TweenService:Create(stroke, TweenInfo.new(0.4), {Transparency = 1}):Play()
+        TweenService:Create(title, TweenInfo.new(0.4), {TextTransparency = 1}):Play()
+        TweenService:Create(barBg, TweenInfo.new(0.4), {BackgroundTransparency = 1}):Play()
+        TweenService:Create(barFill, TweenInfo.new(0.4), {BackgroundTransparency = 1}):Play()
+        
+        task.wait(0.5)
+        overlay:Destroy()
+        isTeleporting = false
+    end)
+end
+
+-- ==========================================
+-- 2. الزر العائم الاحترافي
+-- ==========================================
+local QuickBtn = Instance.new("ImageButton", ScreenGui)
+QuickBtn.Size = UDim2.new(0, 50, 0, 50)
+QuickBtn.Position = UDim2.new(1, -70, 0.6, 0)
+QuickBtn.BackgroundColor3 = Theme.Sidebar
+Instance.new("UICorner", QuickBtn).CornerRadius = UDim.new(1, 0)
+Instance.new("UIStroke", QuickBtn).Color = Theme.Accent
+Instance.new("UIStroke", QuickBtn).Thickness = 2
+
+local QuickIcon = Instance.new("TextLabel", QuickBtn)
+QuickIcon.Size = UDim2.new(1, 0, 1, 0)
+QuickIcon.BackgroundTransparency = 1
+QuickIcon.Text = "⚡"
+QuickIcon.TextSize = 25
+
+local pulseRing = Instance.new("Frame", QuickBtn)
+pulseRing.Size = UDim2.new(1, 0, 1, 0)
+pulseRing.BackgroundColor3 = Theme.Accent
+pulseRing.ZIndex = QuickBtn.ZIndex - 1
+Instance.new("UICorner", pulseRing).CornerRadius = UDim.new(1, 0)
+
+task.spawn(function()
+    while scriptRunning do
+        if savedCFrame then
+            pulseRing.Size = UDim2.new(1, 0, 1, 0)
+            pulseRing.BackgroundTransparency = 0.3
+            local t = TweenService:Create(pulseRing, TweenInfo.new(1.5), {Size = UDim2.new(1.8, 0, 1.8, 0), Position = UDim2.new(-0.4, 0, -0.4, 0), BackgroundTransparency = 1})
+            t:Play()
+            t.Completed:Wait()
+        else
+            task.wait(1)
+        end
+    end
+end)
+
+QuickBtn.MouseButton1Click:Connect(function()
+    TweenService:Create(QuickBtn, TweenInfo.new(0.1, Enum.EasingStyle.Bounce), {Size = UDim2.new(0, 45, 0, 45)}):Play()
+    task.wait(0.1)
+    TweenService:Create(QuickBtn, TweenInfo.new(0.1, Enum.EasingStyle.Bounce), {Size = UDim2.new(0, 50, 0, 50)}):Play()
+    if savedCFrame then safeTeleport(savedCFrame) end
+end)
+
+-- ==========================================
+-- 3. بناء الواجهة الرئيسية (Main GUI)
+-- ==========================================
+local MainFrame = Instance.new("Frame", ScreenGui)
+MainFrame.Size = UDim2.new(0, 450, 0, 320)
+MainFrame.Position = UDim2.new(0.5, -225, 0.5, -160)
+MainFrame.BackgroundColor3 = Theme.Background
+MainFrame.ClipsDescendants = true
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+Instance.new("UIStroke", MainFrame).Color = Color3.fromRGB(40, 40, 50)
+
+-- سحب ناعم (Smooth Dragging)
+local dragging, dragInput, dragStart, startPos
+MainFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+    end
+end)
+MainFrame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        TweenService:Create(MainFrame, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)}):Play()
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+-- الهيكل الداخلي
+local Sidebar = Instance.new("Frame", MainFrame)
+Sidebar.Size = UDim2.new(0, 130, 1, 0)
+Sidebar.BackgroundColor3 = Theme.Sidebar
+Sidebar.BorderSizePixel = 0
+
+local Title = Instance.new("TextLabel", Sidebar)
+Title.Size = UDim2.new(1, 0, 0, 50)
+Title.BackgroundTransparency = 1
+Title.Font = Enum.Font.GothamBlack
+Title.Text = "PREMIUM"
+Title.TextColor3 = Theme.Accent
+Title.TextSize = 16
+
+local ContentArea = Instance.new("Frame", MainFrame)
+ContentArea.Size = UDim2.new(1, -130, 1, -40)
+ContentArea.Position = UDim2.new(0, 130, 0, 40)
+ContentArea.BackgroundTransparency = 1
+
+local Topbar = Instance.new("Frame", MainFrame)
+Topbar.Size = UDim2.new(1, -130, 0, 40)
+Topbar.Position = UDim2.new(0, 130, 0, 0)
+Topbar.BackgroundTransparency = 1
+
+local CloseBtn = Instance.new("TextButton", Topbar)
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -35, 0.5, -15)
+CloseBtn.BackgroundTransparency = 1
+CloseBtn.Text = "✕"
+CloseBtn.TextColor3 = Theme.TextSecondary
+CloseBtn.TextSize = 16
+CloseBtn.Font = Enum.Font.GothamBold
+
+CloseBtn.MouseButton1Click:Connect(function()
+    scriptRunning = false
+    blurEffect:Destroy()
+    ScreenGui:Destroy()
+end)
+
+-- نظام التبويبات والمكونات (UI Library Logic)
+local Tabs = {}
+local TabButtons = {}
+
+local TabListLayout = Instance.new("UIListLayout", Sidebar)
+TabListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+TabListLayout.Padding = UDim.new(0, 5)
+TabListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+-- مساحة فارغة تحت العنوان
+local Spacer = Instance.new("Frame", Sidebar)
+Spacer.Size = UDim2.new(1, 0, 0, 10)
+Spacer.BackgroundTransparency = 1
+
+local function SelectTab(tabName)
+    for name, frame in pairs(Tabs) do
+        frame.Visible = (name == tabName)
+        local btn = TabButtons[name]
+        if name == tabName then
+            TweenService:Create(btn, TweenInfo.new(0.3), {BackgroundColor3 = Theme.Accent, TextColor3 = Color3.fromRGB(255,255,255)}):Play()
+        else
+            TweenService:Create(btn, TweenInfo.new(0.3), {BackgroundColor3 = Theme.ElementBg, TextColor3 = Theme.TextSecondary}):Play()
+        end
+    end
+end
+
+local function CreateTab(name, icon)
+    local btn = Instance.new("TextButton", Sidebar)
+    btn.Size = UDim2.new(0.9, 0, 0, 35)
+    btn.BackgroundColor3 = Theme.ElementBg
+    btn.Text = icon .. "  " .. name
+    btn.Font = Enum.Font.GothamSemibold
+    btn.TextSize = 13
+    btn.TextColor3 = Theme.TextSecondary
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    
+    local page = Instance.new("ScrollingFrame", ContentArea)
+    page.Size = UDim2.new(1, -20, 1, -10)
+    page.Position = UDim2.new(0, 10, 0, 5)
+    page.BackgroundTransparency = 1
+    page.ScrollBarThickness = 3
+    page.Visible = false
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    
+    local layout = Instance.new("UIListLayout", page)
+    layout.Padding = UDim.new(0, 10)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    Tabs[name] = page
+    TabButtons[name] = btn
+
+    btn.MouseButton1Click:Connect(function() SelectTab(name) end)
+    return page
+end
+
+local function CreateToggle(parent, text, callback)
+    local frame = Instance.new("Frame", parent)
+    frame.Size = UDim2.new(1, 0, 0, 45)
+    frame.BackgroundColor3 = Theme.ElementBg
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+
+    local label = Instance.new("TextLabel", frame)
+    label.Size = UDim2.new(0.7, 0, 1, 0)
+    label.Position = UDim2.new(0.05, 0, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.Font = Enum.Font.GothamSemibold
+    label.TextColor3 = Theme.TextPrimary
+    label.TextSize = 13
+    label.TextXAlignment = Enum.TextXAlignment.Left
+
+    local switchBg = Instance.new("Frame", frame)
+    switchBg.Size = UDim2.new(0, 40, 0, 20)
+    switchBg.Position = UDim2.new(0.85, 0, 0.5, -10)
+    switchBg.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+    Instance.new("UICorner", switchBg).CornerRadius = UDim.new(1, 0)
+
+    local switchKnob = Instance.new("Frame", switchBg)
+    switchKnob.Size = UDim2.new(0, 16, 0, 16)
+    switchKnob.Position = UDim2.new(0, 2, 0.5, -8)
+    switchKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    Instance.new("UICorner", switchKnob).CornerRadius = UDim.new(1, 0)
+
+    local btn = Instance.new("TextButton", frame)
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = ""
+
+    local state = false
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        if state then
+            TweenService:Create(switchBg, TweenInfo.new(0.2), {BackgroundColor3 = Theme.Success}):Play()
+            TweenService:Create(switchKnob, TweenInfo.new(0.2), {Position = UDim2.new(1, -18, 0.5, -8)}):Play()
+        else
+            TweenService:Create(switchBg, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(50, 50, 60)}):Play()
+            TweenService:Create(switchKnob, TweenInfo.new(0.2), {Position = UDim2.new(0, 2, 0.5, -8)}):Play()
+        end
+        callback(state)
+    end)
+end
+
+local function CreateInput(parent, placeholder, callback)
+    local frame = Instance.new("Frame", parent)
+    frame.Size = UDim2.new(1, 0, 0, 40)
+    frame.BackgroundColor3 = Theme.ElementBg
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+    Instance.new("UIStroke", frame).Color = Color3.fromRGB(50, 50, 60)
+
+    local box = Instance.new("TextBox", frame)
+    box.Size = UDim2.new(0.9, 0, 1, 0)
+    box.Position = UDim2.new(0.05, 0, 0, 0)
+    box.BackgroundTransparency = 1
+    box.PlaceholderText = placeholder
+    box.Text = ""
+    box.Font = Enum.Font.Gotham
+    box.TextColor3 = Theme.TextPrimary
+    box.TextSize = 13
+    box.TextXAlignment = Enum.TextXAlignment.Left
+    
+    box.FocusLost:Connect(function() callback(box.Text) end)
+end
+
+local function CreateButton(parent, text, color, callback)
+    local btn = Instance.new("TextButton", parent)
+    btn.Size = UDim2.new(1, 0, 0, 40)
+    btn.BackgroundColor3 = color or Theme.ElementBg
+    btn.Text = text
+    btn.Font = Enum.Font.GothamBold
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextSize = 13
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    btn.MouseButton1Down:Connect(function() TweenService:Create(btn, TweenInfo.new(0.1), {Size = UDim2.new(0.98, 0, 0, 38)}):Play() end)
+    btn.MouseButton1Up:Connect(function() TweenService:Create(btn, TweenInfo.new(0.1), {Size = UDim2.new(1, 0, 0, 40)}):Play() callback() end)
+end
+
+-- ==========================================
+-- 4. تعبئة التبويبات بالوظائف
+-- ==========================================
+local PlayerTab = CreateTab("اللاعب", "🏃")
+local TeleportTab = CreateTab("الانتقال", "🌍")
+
+-- تبويب اللاعب
+CreateInput(PlayerTab, "⚡ سرعة المشي (رقم)", function(val)
+    local num = tonumber(val)
+    if num then 
+        local char = localPlayer.Character
+        if char and char:FindFirstChildOfClass("Humanoid") then
+            char:FindFirstChildOfClass("Humanoid").WalkSpeed = num
+        end
+    end
+end)
+
+CreateInput(PlayerTab, "🦘 قوة القفز (رقم)", function(val)
+    local num = tonumber(val)
+    if num then 
+        local char = localPlayer.Character
+        if char and char:FindFirstChildOfClass("Humanoid") then
+            char:FindFirstChildOfClass("Humanoid").UseJumpPower = true
+            char:FindFirstChildOfClass("Humanoid").JumpPower = num
+        end
+    end
+end)
+
+CreateInput(PlayerTab, "🛸 سرعة الطيران", function(val)
+    local num = tonumber(val)
+    if num then flySpeed = num end
+end)
+
+CreateToggle(PlayerTab, "🛸 تفعيل الطيران", function(state)
+    flying = state
+    local character = localPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    if flying then
+        local bv = Instance.new("BodyVelocity")
+        bv.Name = "PremiumFly"
+        bv.MaxForce = Vector3.new(100000, 100000, 100000)
+        bv.Velocity = Vector3.zero
+        bv.Parent = root
+
+        task.spawn(function()
+            local camera = workspace.CurrentCamera
+            while flying and scriptRunning and character.Parent do
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                if not humanoid then break end
+
+                local moveDir = humanoid.MoveDirection
+                if moveDir.Magnitude > 0 then
+                    local camLook = camera.CFrame.LookVector
+                    local flatCam = Vector3.new(camLook.X, 0, camLook.Z)
+                    local yDir = flatCam.Magnitude > 0 and (camLook.Y * flatCam.Unit:Dot(moveDir) * 1.5) or 0
+                    local finalDir = Vector3.new(moveDir.X, yDir, moveDir.Z).Unit
+                    root.CFrame = root.CFrame + (finalDir * flySpeed)
+                end
+                if humanoid.Jump then root.CFrame = root.CFrame + Vector3.new(0, flySpeed, 0) end
+                RunService.RenderStepped:Wait()
+            end
+        end)
+    else
+        local bv = root:FindFirstChild("PremiumFly")
+        if bv then bv:Destroy() end
+    end
+end)
+
+-- تبويب الانتقال (Teleport)
+CreateButton(TeleportTab, "📌 حفظ الإحداثيات الحالية", Theme.Accent, function()
+    local root = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if root then savedCFrame = root.CFrame end
+end)
+
+CreateButton(TeleportTab, "🚀 العودة للإحداثيات المحفوظة", Theme.Success, function()
+    if savedCFrame then safeTeleport(savedCFrame) end
+end)
+
+CreateToggle(TeleportTab, "🛡️ العودة التلقائية (حماية)", function(state)
+    autoReturnEnabled = state
+end)
+
+CreateInput(TeleportTab, "📏 مسافة العودة التلقائية (مثال: 50)", function(val)
+    local num = tonumber(val)
+    if num then autoReturnDistance = num end
+end)
+
+CreateButton(TeleportTab, "📄 نسخ الإحداثيات", Theme.ElementBg, function()
+    if savedCFrame and setclipboard then setclipboard(tostring(savedCFrame)) end
+end)
+
+-- تشغيل الكود المساعد للعودة التلقائية
+task.spawn(function()
+    while scriptRunning do
+        if autoReturnEnabled and savedCFrame and not isTeleporting then
+            local char = localPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root and (root.Position - savedCFrame.Position).Magnitude > autoReturnDistance then
+                safeTeleport(savedCFrame)
+            end
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- افتح التبويب الأول افتراضياً
+SelectTab("اللاعب")
