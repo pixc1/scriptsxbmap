@@ -1,9 +1,30 @@
 --[[
-	PREMIUM HUB v2.0
-	واجهة جديدة بالكامل: قائمة جانبية (يمين) + تبويبات + Toggles + Sliders + إشعارات
-	مصممة للجوال واللمس، وتدعم العربية (RTL)
+	PREMIUM HUB v3.0
+	- حدود متحركة + عنوان لامع + خلفية متدرجة
+	- تأثير ريبل (Ripple) على الأزرار + تحريك عند الضغط
+	- مؤشر تبويبات منزلق + انتقال ناعم بين الصفحات
+	- إشعارات بشريط عدّاد + شاشة تحميل بدوّارة
+	- تبويب جديد: 🏆 الكؤوس (انتقال لكل كأس + جولة تلقائية)
+	اختصار: RightShift لإظهار/إخفاء النافذة
 ]]
 
+-- ==========================================
+-- ⚙️ إعدادات الكؤوس (عدّل هنا)
+-- ==========================================
+local CONFIG = {
+	CupOffset = Vector3.new(0, 3, 0), -- يرفع اللاعب فوق الكأس شوي حتى ما يعلق بالأرض
+	TourDelay = 1.5,                  -- الفاصل الافتراضي بين الكؤوس في الجولة (ثانية)
+}
+
+-- أضف كل كأس بسطر: { "اسم الكأس", Vector3.new(X, Y, Z) },
+local Cups = {
+	-- { "كأس 1", Vector3.new(0, 0, 0) },
+	-- { "كأس 2", Vector3.new(0, 0, 0) },
+}
+
+-- ==========================================
+-- الخدمات
+-- ==========================================
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
@@ -32,8 +53,10 @@ end
 local targetParent = pickParent()
 
 for _, p in ipairs({ targetParent, localPlayer:FindFirstChild("PlayerGui") }) do
-	local old = p and p:FindFirstChild("PremiumHubV2")
+	local old = p and p:FindFirstChild("PremiumHubV3")
 	if old then old:Destroy() end
+	local old2 = p and p:FindFirstChild("PremiumHubV2")
+	if old2 then old2:Destroy() end
 end
 
 -- ==========================================
@@ -56,6 +79,7 @@ local Theme = {
 }
 
 local DEFAULT_SPEED, DEFAULT_JUMP = 16, 50
+local WHITE = Color3.new(1, 1, 1)
 
 local State = {
 	running = true,
@@ -65,11 +89,16 @@ local State = {
 	flying = false, flySpeed = 2.5,
 	autoReturn = false, returnDist = 50,
 	loader = true,
+	notifs = true,
 	teleporting = false,
+	tourDelay = CONFIG.TourDelay,
+	visited = {},
 }
 
 local Conns = {}
 local function track(c) table.insert(Conns, c) return c end
+
+local Loops = {}
 
 -- ==========================================
 -- دوال مساعدة
@@ -102,6 +131,14 @@ local function tween(inst, t, props, style, dir)
 	return tw
 end
 
+-- تأثير يتكرر للأبد (حدود، لمعة...)
+local function loop(inst, time, props)
+	local tw = TweenService:Create(inst, TweenInfo.new(time, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1), props)
+	tw:Play()
+	table.insert(Loops, tw)
+	return tw
+end
+
 -- ربط العناصر بلون الواجهة (يتغير من الإعدادات)
 local accentBinds = {}
 local function bindAccent(fn)
@@ -119,6 +156,21 @@ local function getHum() local c = getChar() return c and c:FindFirstChildOfClass
 
 local function isPress(i)
 	return i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch
+end
+
+-- تأثير الموجة عند الضغط
+local function ripple(obj, x, y)
+	local rx = math.clamp(x - obj.AbsolutePosition.X, 0, obj.AbsoluteSize.X)
+	local ry = math.clamp(y - obj.AbsolutePosition.Y, 0, obj.AbsoluteSize.Y)
+	local size = math.max(obj.AbsoluteSize.X, obj.AbsoluteSize.Y) * 2.4
+	local c = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(rx, ry), Size = UDim2.fromOffset(0, 0),
+		BackgroundColor3 = WHITE, BackgroundTransparency = 0.78, BorderSizePixel = 0,
+		ZIndex = obj.ZIndex + 1, Parent = obj,
+	})
+	corner(c, UDim.new(1, 0))
+	tween(c, 0.55, { Size = UDim2.fromOffset(size, size), BackgroundTransparency = 1 })
+	task.delay(0.6, function() c:Destroy() end)
 end
 
 -- سحب يعمل باللمس والماوس
@@ -159,9 +211,9 @@ end
 -- ScreenGui
 -- ==========================================
 local gui = new("ScreenGui", {
-	Name = "PremiumHubV2",
+	Name = "PremiumHubV3",
 	ResetOnSpawn = false,
-	IgnoreGuiInset = true,
+	IgnoreGuiInset = false,
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	DisplayOrder = 999,
 	Parent = targetParent,
@@ -174,7 +226,7 @@ local notifyHolder = new("Frame", {
 	BackgroundTransparency = 1,
 	AnchorPoint = Vector2.new(0.5, 0),
 	Position = UDim2.new(0.5, 0, 0, 12),
-	Size = UDim2.fromOffset(260, 200),
+	Size = UDim2.fromOffset(270, 200),
 	ZIndex = 200,
 	Parent = gui,
 })
@@ -186,9 +238,18 @@ new("UIListLayout", {
 })
 
 local function notify(text, kind)
+	if not State.notifs and kind ~= "error" then return end
+
+	-- حد أقصى 4 إشعارات ظاهرة
+	local kids = {}
+	for _, c in ipairs(notifyHolder:GetChildren()) do
+		if c:IsA("CanvasGroup") then table.insert(kids, c) end
+	end
+	if #kids >= 4 then kids[1]:Destroy() end
+
 	local col = (kind == "error" and Theme.red) or (kind == "success" and Theme.green) or Theme.accent
 	local card = new("CanvasGroup", {
-		Size = UDim2.new(1, 0, 0, 34),
+		Size = UDim2.new(1, 0, 0, 36),
 		BackgroundColor3 = Theme.card,
 		GroupTransparency = 1,
 		ZIndex = 200,
@@ -196,16 +257,24 @@ local function notify(text, kind)
 	})
 	corner(card, 9)
 	stroke(card, col, 1.2)
+	local sc = new("UIScale", { Scale = 0.85, Parent = card })
 	new("Frame", {
 		Size = UDim2.new(0, 3, 1, 0), Position = UDim2.new(1, -3, 0, 0),
 		BackgroundColor3 = col, BorderSizePixel = 0, ZIndex = 201, Parent = card,
 	})
 	new("TextLabel", {
-		BackgroundTransparency = 1, Size = UDim2.new(1, -24, 1, 0), Position = UDim2.new(0, 8, 0, 0),
+		BackgroundTransparency = 1, Size = UDim2.new(1, -24, 1, -2), Position = UDim2.new(0, 8, 0, 0),
 		Font = Enum.Font.GothamMedium, Text = text, TextColor3 = Theme.text, TextSize = 12,
 		TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 201, Parent = card,
 	})
+	local timer = new("Frame", {
+		AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 0, 1, 0), Size = UDim2.new(1, 0, 0, 2),
+		BackgroundColor3 = col, BorderSizePixel = 0, ZIndex = 202, Parent = card,
+	})
 	tween(card, 0.2, { GroupTransparency = 0 })
+	tween(sc, 0.3, { Scale = 1 }, Enum.EasingStyle.Back)
+	tween(timer, 2.2, { Size = UDim2.new(0, 0, 0, 2) }, Enum.EasingStyle.Linear)
+
 	task.delay(2.2, function()
 		if card.Parent then
 			tween(card, 0.25, { GroupTransparency = 1 })
@@ -225,23 +294,43 @@ local function showLoader(duration)
 	})
 	local card = new("CanvasGroup", {
 		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 24),
-		Size = UDim2.fromOffset(230, 96), BackgroundColor3 = Theme.card,
+		Size = UDim2.fromOffset(230, 110), BackgroundColor3 = Theme.card,
 		GroupTransparency = 1, ZIndex = 51, Parent = overlay,
 	})
 	corner(card, 14)
-	local st = stroke(card, Theme.accent, 1.5)
+	stroke(card, Theme.accent, 1.5)
+
+	-- دوّارة
+	local spinner = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 12), Size = UDim2.fromOffset(24, 24),
+		BackgroundTransparency = 1, ZIndex = 52, Parent = card,
+	})
+	corner(spinner, UDim.new(1, 0))
+	local ss = new("UIStroke", {
+		Color = WHITE, Thickness = 3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = spinner,
+	})
+	local sg = new("UIGradient", {
+		Color = ColorSequence.new(Theme.accent),
+		Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.6, 0.9), NumberSequenceKeypoint.new(1, 1),
+		}),
+		Parent = ss,
+	})
+	local spin = TweenService:Create(sg, TweenInfo.new(0.8, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1), { Rotation = 360 })
+	spin:Play()
+
 	new("TextLabel", {
-		BackgroundTransparency = 1, Position = UDim2.new(0, 0, 0, 12), Size = UDim2.new(1, 0, 0, 26),
-		Font = Enum.Font.GothamBlack, Text = "🚀 جاري الانتقال...", TextColor3 = Theme.text, TextSize = 16,
+		BackgroundTransparency = 1, Position = UDim2.new(0, 0, 0, 40), Size = UDim2.new(1, 0, 0, 24),
+		Font = Enum.Font.GothamBlack, Text = "🚀 جاري الانتقال...", TextColor3 = Theme.text, TextSize = 15,
 		ZIndex = 52, Parent = card,
 	})
 	local pct = new("TextLabel", {
-		BackgroundTransparency = 1, Position = UDim2.new(0, 0, 0, 38), Size = UDim2.new(1, 0, 0, 18),
-		Font = Enum.Font.GothamMedium, Text = "0%", TextColor3 = Theme.sub, TextSize = 12,
+		BackgroundTransparency = 1, Position = UDim2.new(0, 0, 0, 64), Size = UDim2.new(1, 0, 0, 16),
+		Font = Enum.Font.GothamMedium, Text = "0%", TextColor3 = Theme.sub, TextSize = 11,
 		ZIndex = 52, Parent = card,
 	})
 	local barBg = new("Frame", {
-		Position = UDim2.new(0.1, 0, 0, 68), Size = UDim2.new(0.8, 0, 0, 6),
+		Position = UDim2.new(0.1, 0, 0, 90), Size = UDim2.new(0.8, 0, 0, 6),
 		BackgroundColor3 = Theme.off, BorderSizePixel = 0, ZIndex = 52, Parent = card,
 	})
 	corner(barBg, 3)
@@ -266,17 +355,19 @@ local function showLoader(duration)
 	tween(card, 0.25, { GroupTransparency = 1, Position = UDim2.new(0.5, 0, 0.5, -16) })
 	tween(overlay, 0.3, { BackgroundTransparency = 1 })
 	task.wait(0.32)
+	spin:Cancel()
 	overlay:Destroy()
 end
 
-local function teleport(cf)
+local function teleport(cf, quick)
 	if State.teleporting then return end
 	local root = getRoot()
 	if not root then notify("لا توجد شخصية حالياً", "error") return end
 
 	State.teleporting = true
 	task.spawn(function()
-		local duration = State.loader and 1.2 or 0.2
+		local useLoader = State.loader and not quick
+		local duration = useLoader and 1.2 or 0.25
 
 		local platform = new("Part", {
 			Size = Vector3.new(24, 1, 24),
@@ -288,7 +379,7 @@ local function teleport(cf)
 		root.CFrame = cf
 		root.Anchored = true
 
-		if State.loader then
+		if useLoader then
 			showLoader(duration)
 		else
 			task.wait(duration)
@@ -302,7 +393,8 @@ local function teleport(cf)
 end
 
 -- ==========================================
--- النافذة الرئيسية (CanvasGroup لتقطيع الزوايا الدائرية)
+-- النافذة الرئيسية
+-- Shell = إطار الحدود المتحركة، Main = CanvasGroup لتقطيع الزوايا
 -- ==========================================
 local function winSize()
 	local vp = workspace.CurrentCamera.ViewportSize
@@ -312,28 +404,75 @@ end
 local W, H = winSize()
 local SIDE_W = 100
 
-local Main = new("CanvasGroup", {
-	Name = "Main",
+local Shell = new("Frame", {
+	Name = "Shell",
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0.5, 0.5),
 	Size = UDim2.fromOffset(W * 0.9, H * 0.9),
+	BackgroundTransparency = 1,
+	Parent = gui,
+})
+corner(Shell, 14)
+
+-- حدود متحركة بتدرج دوّار
+local borderStroke = new("UIStroke", {
+	Color = WHITE, Thickness = 2, Transparency = 1,
+	ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = Shell,
+})
+local borderGrad = new("UIGradient", { Parent = borderStroke })
+bindAccent(function(c)
+	borderGrad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, c),
+		ColorSequenceKeypoint.new(0.35, Theme.stroke),
+		ColorSequenceKeypoint.new(0.65, Theme.stroke),
+		ColorSequenceKeypoint.new(1, c),
+	})
+end)
+loop(borderGrad, 5, { Rotation = 360 })
+
+local Main = new("CanvasGroup", {
+	Name = "Main",
+	Size = UDim2.fromScale(1, 1),
 	BackgroundColor3 = Theme.bg,
 	BorderSizePixel = 0,
 	GroupTransparency = 1,
-	Parent = gui,
+	Parent = Shell,
 })
 corner(Main, 14)
-stroke(Main, Theme.stroke, 1.5)
+
+-- خلفية متدرجة هادئة تتحرك ببطء
+local BgGlow = new("Frame", {
+	Size = UDim2.fromScale(1, 1), BackgroundColor3 = WHITE, BorderSizePixel = 0, ZIndex = 0, Parent = Main,
+})
+local bgGrad = new("UIGradient", { Rotation = 45, Parent = BgGlow })
+bindAccent(function(c)
+	bgGrad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.bg),
+		ColorSequenceKeypoint.new(1, Theme.bg:Lerp(c, 0.2)),
+	})
+end)
+loop(bgGrad, 14, { Rotation = 405 })
 
 -- الهيدر
 local Header = new("Frame", {
 	Size = UDim2.new(1, 0, 0, 42), BackgroundColor3 = Theme.header, BorderSizePixel = 0, Parent = Main,
 })
-new("TextLabel", {
+local title = new("TextLabel", {
 	BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
 	Size = UDim2.new(0.6, 0, 1, 0), Font = Enum.Font.GothamBlack, Text = "✨ PREMIUM HUB",
-	TextColor3 = Theme.text, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Right, Parent = Header,
+	TextColor3 = WHITE, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Right, Parent = Header,
 })
+-- لمعة تمر على العنوان
+local titleGrad = new("UIGradient", { Offset = Vector2.new(-1, 0), Parent = title })
+bindAccent(function(c)
+	titleGrad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.text),
+		ColorSequenceKeypoint.new(0.5, c),
+		ColorSequenceKeypoint.new(1, Theme.text),
+	})
+end)
+loop(titleGrad, 2.6, { Offset = Vector2.new(1, 0) })
+
 local accentLine = new("Frame", {
 	Position = UDim2.new(0, 0, 0, 41), Size = UDim2.new(1, 0, 0, 2), BorderSizePixel = 0,
 	BackgroundColor3 = Theme.accent, Parent = Main,
@@ -346,15 +485,18 @@ new("UIGradient", {
 	Parent = accentLine,
 })
 
-makeDraggable(Header, Main)
+makeDraggable(Header, Shell)
 
 local function headerBtn(text, xOffset, color)
 	local b = new("TextButton", {
 		Position = UDim2.new(0, xOffset, 0.5, -13), Size = UDim2.fromOffset(26, 26),
 		BackgroundColor3 = color, AutoButtonColor = false, Font = Enum.Font.GothamBold,
-		Text = text, TextColor3 = Color3.new(1, 1, 1), TextSize = 13, BorderSizePixel = 0, Parent = Header,
+		Text = text, TextColor3 = WHITE, TextSize = 13, BorderSizePixel = 0, Parent = Header,
 	})
 	corner(b, 8)
+	local sc = new("UIScale", { Parent = b })
+	b.InputBegan:Connect(function(i) if isPress(i) then tween(sc, 0.08, { Scale = 0.88 }) end end)
+	b.InputEnded:Connect(function(i) if isPress(i) then tween(sc, 0.2, { Scale = 1 }, Enum.EasingStyle.Back) end end)
 	return b
 end
 local CloseBtn = headerBtn("✕", 10, Theme.red)
@@ -370,18 +512,34 @@ local Side = new("Frame", {
 	AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0),
 	Size = UDim2.new(0, SIDE_W, 1, 0), BackgroundColor3 = Theme.side, BorderSizePixel = 0, Parent = Body,
 })
-local TabList = new("Frame", {
-	BackgroundTransparency = 1, Position = UDim2.new(0, 0, 0, 8), Size = UDim2.new(1, 0, 1, -50), Parent = Side,
+
+-- مؤشر التبويب المنزلق
+local Highlight = new("Frame", {
+	BackgroundColor3 = Theme.accent, BackgroundTransparency = 0.86, BorderSizePixel = 0,
+	Size = UDim2.fromOffset(SIDE_W - 14, 32), Position = UDim2.fromOffset(7, 8), ZIndex = 1, Parent = Side,
+})
+corner(Highlight, 9)
+local HBar = new("Frame", {
+	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -1, 0.5, 0), Size = UDim2.fromOffset(3, 16),
+	BackgroundColor3 = Theme.accent, BorderSizePixel = 0, Parent = Highlight,
+})
+corner(HBar, 2)
+bindAccent(function(c) Highlight.BackgroundColor3 = c HBar.BackgroundColor3 = c end)
+
+local TabList = new("ScrollingFrame", {
+	BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 0,
+	AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+	Position = UDim2.new(0, 0, 0, 8), Size = UDim2.new(1, 0, 1, -50), ZIndex = 2, Parent = Side,
 })
 new("UIListLayout", {
-	Padding = UDim.new(0, 5), HorizontalAlignment = Enum.HorizontalAlignment.Center,
+	Padding = UDim.new(0, 4), HorizontalAlignment = Enum.HorizontalAlignment.Center,
 	SortOrder = Enum.SortOrder.LayoutOrder, Parent = TabList,
 })
 new("TextLabel", {
 	AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.new(1, -16, 0, 30),
 	BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 10, TextColor3 = Theme.sub,
-	Text = "@" .. localPlayer.Name .. "\nv2.0", TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd,
-	Parent = Side,
+	Text = "@" .. localPlayer.Name .. "\nv3.0", TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd,
+	ZIndex = 2, Parent = Side,
 })
 
 local Pages = new("Frame", {
@@ -392,29 +550,48 @@ local Pages = new("Frame", {
 -- نظام التبويبات
 -- ==========================================
 local tabs = {}
+local currentTab
 
-local function selectTab(t)
+local function placeHighlight(animate)
+	if not currentTab then return end
+	local b = currentTab.btn
+	local pos = b.AbsolutePosition - Side.AbsolutePosition
+	local target = UDim2.fromOffset(pos.X, pos.Y)
+	Highlight.Size = UDim2.fromOffset(b.AbsoluteSize.X, b.AbsoluteSize.Y)
+	if animate then
+		tween(Highlight, 0.3, { Position = target }, Enum.EasingStyle.Quint)
+	else
+		Highlight.Position = target
+	end
+end
+
+track(TabList:GetPropertyChangedSignal("CanvasPosition"):Connect(function() placeHighlight(false) end))
+
+local function selectTab(t, instant)
+	currentTab = t
 	for _, o in ipairs(tabs) do
 		local on = (o == t)
-		o.page.Visible = on
-		o.ind.Visible = on
-		tween(o.btn, 0.15, { BackgroundTransparency = on and 0 or 1 })
-		tween(o.label, 0.15, { TextColor3 = on and Theme.text or Theme.sub })
+		if on and not o.page.Visible then
+			o.page.Position = UDim2.fromOffset(instant and 0 or 18, 0)
+			o.page.Visible = true
+			if not instant then
+				tween(o.page, 0.28, { Position = UDim2.fromOffset(0, 0) }, Enum.EasingStyle.Quint)
+			end
+		elseif not on then
+			o.page.Visible = false
+		end
+		tween(o.label, 0.18, { TextColor3 = on and Theme.text or Theme.sub })
 	end
+	placeHighlight(not instant)
 end
 
 local function addTab(name, icon)
 	local btn = new("TextButton", {
-		Size = UDim2.new(1, -14, 0, 34), BackgroundColor3 = Theme.card, BackgroundTransparency = 1,
-		AutoButtonColor = false, Text = "", BorderSizePixel = 0, LayoutOrder = #tabs + 1, Parent = TabList,
+		Size = UDim2.new(1, -14, 0, 32), BackgroundTransparency = 1,
+		AutoButtonColor = false, Text = "", BorderSizePixel = 0, ClipsDescendants = true,
+		LayoutOrder = #tabs + 1, Parent = TabList,
 	})
 	corner(btn, 9)
-	local ind = new("Frame", {
-		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -2, 0.5, 0), Size = UDim2.fromOffset(3, 16),
-		BorderSizePixel = 0, BackgroundColor3 = Theme.accent, Visible = false, Parent = btn,
-	})
-	corner(ind, 2)
-	bindAccent(function(c) ind.BackgroundColor3 = c end)
 	local label = new("TextLabel", {
 		BackgroundTransparency = 1, Size = UDim2.new(1, -16, 1, 0), Position = UDim2.new(0, 0, 0, 0),
 		Font = Enum.Font.GothamBold, Text = icon .. " " .. name, TextColor3 = Theme.sub, TextSize = 11,
@@ -435,8 +612,9 @@ local function addTab(name, icon)
 		Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = page,
 	})
 
-	local t = { btn = btn, label = label, ind = ind, page = page }
+	local t = { btn = btn, label = label, page = page }
 	table.insert(tabs, t)
+	btn.InputBegan:Connect(function(i) if isPress(i) then ripple(btn, i.Position.X, i.Position.Y) end end)
 	btn.Activated:Connect(function() selectTab(t) end)
 	return page
 end
@@ -446,11 +624,12 @@ end
 -- ==========================================
 local function Card(page, height)
 	local f = new("Frame", {
-		Size = UDim2.new(1, 0, 0, height), BackgroundColor3 = Theme.card, BorderSizePixel = 0, Parent = page,
+		Size = UDim2.new(1, 0, 0, height), BackgroundColor3 = Theme.card, BorderSizePixel = 0,
+		ClipsDescendants = true, Parent = page,
 	})
 	corner(f, 10)
-	stroke(f, Theme.stroke, 1)
-	return f
+	local s = stroke(f, Theme.stroke, 1)
+	return f, s
 end
 
 local function Section(page, text)
@@ -477,22 +656,27 @@ local function Toggle(page, text, default, callback)
 		Size = UDim2.new(1, -76, 1, -6), Font = Enum.Font.GothamMedium, Text = text, TextColor3 = Theme.text,
 		TextSize = 12, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Right, Parent = card,
 	})
-	local track_ = new("Frame", {
+	local trackBar = new("Frame", {
 		AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0), Size = UDim2.fromOffset(40, 22),
 		BackgroundColor3 = Theme.off, BorderSizePixel = 0, Parent = card,
 	})
-	corner(track_, 11)
+	corner(trackBar, 11)
+	local glow = stroke(trackBar, Theme.accent, 2, 1)
 	local knob = new("Frame", {
 		AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0), Size = UDim2.fromOffset(16, 16),
-		BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = track_,
+		BackgroundColor3 = WHITE, BorderSizePixel = 0, Parent = trackBar,
 	})
 	corner(knob, 8)
 
 	local state = default and true or false
 	local function render(animate)
-		local t = animate and 0.18 or 0
-		tween(track_, t, { BackgroundColor3 = state and Theme.accent or Theme.off })
-		tween(knob, t, { Position = state and UDim2.new(0, 21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0) })
+		local t = animate and 0.2 or 0
+		tween(trackBar, t, { BackgroundColor3 = state and Theme.accent or Theme.off })
+		tween(glow, t, { Transparency = state and 0.55 or 1, Color = Theme.accent })
+		tween(knob, t, {
+			Position = state and UDim2.new(0, 21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+			Size = UDim2.fromOffset(16, 16),
+		}, Enum.EasingStyle.Back)
 	end
 	bindAccent(function() render(false) end)
 
@@ -508,6 +692,12 @@ local function Toggle(page, text, default, callback)
 	local hit = new("TextButton", {
 		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", Parent = card,
 	})
+	hit.InputBegan:Connect(function(i)
+		if isPress(i) then
+			ripple(card, i.Position.X, i.Position.Y)
+			if not state then tween(knob, 0.12, { Size = UDim2.fromOffset(18, 16) }) end
+		end
+	end)
 	hit.Activated:Connect(function() apply(not state, true) end)
 
 	return { Set = function(v) apply(v and true or false, false) end }
@@ -543,9 +733,11 @@ local function Slider(page, text, min, max, default, step, callback)
 	bindAccent(function(c) fill.BackgroundColor3 = c end)
 	local knob = new("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0), Size = UDim2.fromOffset(16, 16),
-		BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = trackBar,
+		BackgroundColor3 = WHITE, BorderSizePixel = 0, Parent = trackBar,
 	})
 	corner(knob, 8)
+	local knobStroke = stroke(knob, Theme.accent, 2, 1)
+	bindAccent(function(c) knobStroke.Color = c end)
 
 	local value = default
 	local function fmt(v)
@@ -576,6 +768,8 @@ local function Slider(page, text, min, max, default, step, callback)
 		if isPress(i) then
 			dragging = true
 			page.ScrollingEnabled = false -- يمنع تمرير الصفحة أثناء سحب السلايدر
+			tween(knob, 0.12, { Size = UDim2.fromOffset(21, 21) }, Enum.EasingStyle.Back)
+			tween(knobStroke, 0.12, { Transparency = 0.4 })
 			fromX(i.Position.X)
 		end
 	end)
@@ -588,6 +782,8 @@ local function Slider(page, text, min, max, default, step, callback)
 		if dragging and isPress(i) then
 			dragging = false
 			page.ScrollingEnabled = true
+			tween(knob, 0.15, { Size = UDim2.fromOffset(16, 16) })
+			tween(knobStroke, 0.15, { Transparency = 1 })
 		end
 	end))
 
@@ -603,13 +799,21 @@ end
 local function Button(page, text, color, callback)
 	local btn = new("TextButton", {
 		Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = color or Theme.accent, AutoButtonColor = false,
-		Font = Enum.Font.GothamBold, Text = text, TextColor3 = Color3.new(1, 1, 1), TextSize = 12,
-		BorderSizePixel = 0, Parent = page,
+		Font = Enum.Font.GothamBold, Text = text, TextColor3 = WHITE, TextSize = 12,
+		BorderSizePixel = 0, ClipsDescendants = true, Parent = page,
 	})
 	corner(btn, 10)
 	if not color then bindAccent(function(c) btn.BackgroundColor3 = c end) end
-	btn.InputBegan:Connect(function(i) if isPress(i) then tween(btn, 0.08, { BackgroundTransparency = 0.3 }) end end)
-	btn.InputEnded:Connect(function(i) if isPress(i) then tween(btn, 0.15, { BackgroundTransparency = 0 }) end end)
+	local sc = new("UIScale", { Parent = btn })
+	btn.InputBegan:Connect(function(i)
+		if isPress(i) then
+			tween(sc, 0.08, { Scale = 0.96 })
+			ripple(btn, i.Position.X, i.Position.Y)
+		end
+	end)
+	btn.InputEnded:Connect(function(i)
+		if isPress(i) then tween(sc, 0.2, { Scale = 1 }, Enum.EasingStyle.Back) end
+	end)
 	btn.Activated:Connect(function() if callback then callback(btn) end end)
 	return btn
 end
@@ -626,6 +830,17 @@ local function Input(page, placeholder)
 	box.Focused:Connect(function() tween(s, 0.15, { Color = Theme.accent }) end)
 	box.FocusLost:Connect(function() tween(s, 0.15, { Color = Theme.stroke }) end)
 	return box
+end
+
+local customBox -- حقل الإحداثيات المخصصة (يُنشأ في تبويب الانتقال)
+
+local function copyText(str)
+	local clip = setclipboard or toclipboard
+	if clip then
+		pcall(clip, str)
+		return true
+	end
+	return false
 end
 
 -- ==========================================
@@ -687,7 +902,7 @@ local speedToggle = Toggle(pageMain, "🏃 تفعيل السرعة", false, func
 		if hum then hum.WalkSpeed = DEFAULT_SPEED end
 	end
 end)
-local speedSlider = Slider(pageMain, "السرعة", 16, 300, State.speed, 1, function(v) State.speed = v end)
+Slider(pageMain, "السرعة", 16, 300, State.speed, 1, function(v) State.speed = v end)
 
 local jumpToggle = Toggle(pageMain, "🦘 تفعيل القفز العالي", false, function(v)
 	State.jumpOn = v
@@ -696,7 +911,7 @@ local jumpToggle = Toggle(pageMain, "🦘 تفعيل القفز العالي", f
 		if hum then hum.JumpPower = DEFAULT_JUMP end
 	end
 end)
-local jumpSlider = Slider(pageMain, "قوة القفز", 50, 350, State.jump, 1, function(v) State.jump = v end)
+Slider(pageMain, "قوة القفز", 50, 350, State.jump, 1, function(v) State.jump = v end)
 
 Section(pageMain, "الطيران")
 flyToggle = Toggle(pageMain, "🛸 تفعيل الطيران", false, function(v)
@@ -707,7 +922,171 @@ flyToggle = Toggle(pageMain, "🛸 تفعيل الطيران", false, function(v
 	setFly(v)
 	notify(v and "تم تفعيل الطيران 🛸" or "تم إيقاف الطيران", v and "success" or nil)
 end)
-local flySlider = Slider(pageMain, "سرعة الطيران", 0.5, 10, State.flySpeed, 0.5, function(v) State.flySpeed = v end)
+Slider(pageMain, "سرعة الطيران", 0.5, 10, State.flySpeed, 0.5, function(v) State.flySpeed = v end)
+
+-- ==========================================
+-- 🏆 تبويب الكؤوس
+-- ==========================================
+local pageCups = addTab("الكؤوس", "🏆")
+
+local setCupsInfo = Info(pageCups, "")
+local cupCards = {}
+
+local function refreshCupsInfo()
+	local total = #Cups
+	if total == 0 then
+		setCupsInfo("🏆 لم تُضف إحداثيات الكؤوس بعد", Theme.orange)
+		return
+	end
+	local done = 0
+	for i = 1, total do
+		if State.visited[i] then done += 1 end
+	end
+	setCupsInfo(string.format("🏆 الكؤوس: %d   •   تمت زيارة: %d", total, done), done == total and Theme.green or Theme.sub)
+end
+
+local function cupPosition(entry)
+	local p = entry[2]
+	if typeof(p) == "CFrame" then p = p.Position end
+	return p
+end
+
+local function markVisited(i)
+	State.visited[i] = true
+	local c = cupCards[i]
+	if c then
+		c.badge.Text = "✓"
+		tween(c.badge, 0.25, { BackgroundColor3 = Theme.green })
+		c.stroke.Color = Theme.green
+		tween(c.stroke, 1.4, { Color = Theme.stroke })
+	end
+	refreshCupsInfo()
+end
+
+local function teleportCup(i, quick)
+	local entry = Cups[i]
+	if not entry then return false end
+	if State.teleporting then return false end
+	if not getRoot() then notify("لا توجد شخصية حالياً", "error") return false end
+	teleport(CFrame.new(cupPosition(entry) + CONFIG.CupOffset), quick)
+	markVisited(i)
+	notify("🏆 " .. tostring(entry[1]), "success")
+	return true
+end
+
+-- الجولة التلقائية
+local tourRunning = false
+local tourBtn
+
+local function setTourUI(on)
+	tourBtn.Text = on and "⏹ إيقاف الجولة" or "▶ جولة على كل الكؤوس"
+	tween(tourBtn, 0.2, { BackgroundColor3 = on and Theme.red or Theme.green })
+end
+
+local function startTour()
+	if tourRunning then return end
+	if #Cups == 0 then notify("لا توجد كؤوس مضافة بعد", "error") return end
+	tourRunning = true
+	setTourUI(true)
+	task.spawn(function()
+		for i = 1, #Cups do
+			if not tourRunning or not State.running then break end
+			repeat task.wait(0.05) until not State.teleporting or not State.running
+			if not teleportCup(i, true) then break end
+			local t0 = os.clock()
+			while tourRunning and State.running and os.clock() - t0 < State.tourDelay do
+				task.wait(0.05)
+			end
+		end
+		if tourRunning then notify("انتهت الجولة على الكؤوس ✅", "success") end
+		tourRunning = false
+		if tourBtn.Parent then setTourUI(false) end
+	end)
+end
+
+tourBtn = Button(pageCups, "▶ جولة على كل الكؤوس", Theme.green, function()
+	if tourRunning then
+		tourRunning = false
+		setTourUI(false)
+	else
+		startTour()
+	end
+end)
+Slider(pageCups, "الفاصل بين الكؤوس (ثانية)", 0.5, 5, State.tourDelay, 0.5, function(v) State.tourDelay = v end)
+
+Section(pageCups, "قائمة الكؤوس")
+
+if #Cups == 0 then
+	Info(pageCups, "أضف الكؤوس في جدول Cups أعلى السكربت")
+end
+
+for i, entry in ipairs(Cups) do
+	local card, cardStroke = Card(pageCups, 46)
+	local p = cupPosition(entry)
+
+	local badge = new("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -10, 0.5, 0), Size = UDim2.fromOffset(28, 28),
+		BackgroundColor3 = Theme.accent, Font = Enum.Font.GothamBlack, Text = tostring(i), TextColor3 = WHITE,
+		TextSize = 13, BorderSizePixel = 0, Parent = card,
+	})
+	corner(badge, UDim.new(1, 0))
+	bindAccent(function(c) if not State.visited[i] then badge.BackgroundColor3 = c end end)
+
+	new("TextLabel", {
+		BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -46, 0.5, 0),
+		Size = UDim2.new(1, -96, 1, -6), Font = Enum.Font.GothamBold, RichText = true,
+		Text = string.format('🏆 %s\n<font size="10" color="rgb(140,140,162)">X %.0f  Y %.0f  Z %.0f</font>', tostring(entry[1]), p.X, p.Y, p.Z),
+		TextColor3 = Theme.text, TextSize = 12, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Right,
+		Parent = card,
+	})
+
+	local go = new("TextButton", {
+		AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 10, 0.5, 0), Size = UDim2.fromOffset(36, 28),
+		BackgroundColor3 = Theme.green, AutoButtonColor = false, Font = Enum.Font.GothamBold, Text = "🚀",
+		TextColor3 = WHITE, TextSize = 14, BorderSizePixel = 0, ClipsDescendants = true, Parent = card,
+	})
+	corner(go, 8)
+	local sc = new("UIScale", { Parent = go })
+	go.InputBegan:Connect(function(inp)
+		if isPress(inp) then
+			tween(sc, 0.08, { Scale = 0.9 })
+			ripple(go, inp.Position.X, inp.Position.Y)
+		end
+	end)
+	go.InputEnded:Connect(function(inp)
+		if isPress(inp) then tween(sc, 0.2, { Scale = 1 }, Enum.EasingStyle.Back) end
+	end)
+	go.Activated:Connect(function() teleportCup(i) end)
+
+	cupCards[i] = { badge = badge, stroke = cardStroke }
+end
+
+Section(pageCups, "أدوات")
+
+Button(pageCups, "📋 نسخ موقعي كسطر كأس جاهز", Theme.orange, function()
+	local root = getRoot()
+	if not root then notify("لا توجد شخصية حالياً", "error") return end
+	local p = root.Position
+	local line = string.format('{ "كأس %d", Vector3.new(%.1f, %.1f, %.1f) },', #Cups + 1, p.X, p.Y, p.Z)
+	if copyText(line) then
+		notify("تم نسخ سطر الكأس", "success")
+	else
+		if customBox then customBox.Text = line end
+		notify("النسخ غير مدعوم، وُضع السطر في حقل الانتقال")
+	end
+end)
+
+Button(pageCups, "↺ تصفير علامات الزيارة", Theme.off, function()
+	State.visited = {}
+	for i, c in pairs(cupCards) do
+		c.badge.Text = tostring(i)
+		tween(c.badge, 0.2, { BackgroundColor3 = Theme.accent })
+	end
+	refreshCupsInfo()
+	notify("تم تصفير العلامات")
+end)
+
+refreshCupsInfo()
 
 -- ==========================================
 -- 📍 تبويب الانتقال
@@ -716,7 +1095,7 @@ local pageTP = addTab("الانتقال", "📍")
 
 local setSavedInfo = Info(pageTP, "📍 لا يوجد موقع محفوظ بعد")
 
-Button(pageTP, "📌 حفظ موقعي الحالي", Theme.blue, function(btn)
+Button(pageTP, "📌 حفظ موقعي الحالي", Theme.blue, function()
 	local root = getRoot()
 	if not root then notify("لا توجد شخصية حالياً", "error") return end
 	State.saved = root.CFrame
@@ -729,14 +1108,10 @@ Button(pageTP, "🚀 انتقال للموقع المحفوظ", Theme.green, fun
 	if State.saved then teleport(State.saved) else notify("احفظ موقعاً أولاً", "error") end
 end)
 
-local customBox
-
 Button(pageTP, "📄 نسخ إحداثيات الموقع المحفوظ", Theme.orange, function()
 	if not State.saved then notify("احفظ موقعاً أولاً", "error") return end
 	local str = tostring(State.saved)
-	local clip = setclipboard or toclipboard
-	if clip then
-		pcall(clip, str)
+	if copyText(str) then
 		notify("تم نسخ الإحداثيات", "success")
 	else
 		customBox.Text = str
@@ -776,7 +1151,7 @@ local autoToggle = Toggle(pageSafe, "🛡️ رجوع تلقائي للموقع 
 	State.autoReturn = v
 	notify(v and "تم تفعيل الرجوع التلقائي" or "تم إيقاف الرجوع التلقائي", v and "success" or nil)
 end)
-local distSlider = Slider(pageSafe, "أقصى مسافة للابتعاد", 10, 500, State.returnDist, 5, function(v)
+Slider(pageSafe, "أقصى مسافة للابتعاد", 10, 500, State.returnDist, 5, function(v)
 	State.returnDist = v
 end)
 
@@ -798,6 +1173,9 @@ local function FloatButton(icon, size)
 	corner(b, UDim.new(1, 0))
 	local st = stroke(b, Theme.accent, 2.5)
 	bindAccent(function(c) st.Color = c b.TextColor3 = c end)
+	local sc = new("UIScale", { Parent = b })
+	b.InputBegan:Connect(function(i) if isPress(i) then tween(sc, 0.08, { Scale = 0.88 }) end end)
+	b.InputEnded:Connect(function(i) if isPress(i) then tween(sc, 0.25, { Scale = 1 }, Enum.EasingStyle.Back) end end)
 	return b, makeDraggable(b, b)
 end
 
@@ -833,7 +1211,10 @@ quick.Activated:Connect(function()
 	if State.saved then teleport(State.saved) else notify("احفظ موقعاً أولاً", "error") end
 end)
 
+Section(pageSet, "العرض")
 Toggle(pageSet, "⚡ زر الانتقال السريع العائم", true, function(v) quick.Visible = v end)
+Toggle(pageSet, "🌈 الحدود المتحركة", true, function(v) borderStroke.Enabled = v end)
+Toggle(pageSet, "🔔 الإشعارات", true, function(v) State.notifs = v end)
 
 -- ألوان الواجهة
 local swatchCard = Card(pageSet, 74)
@@ -859,15 +1240,21 @@ for _, col in ipairs({
 		BorderSizePixel = 0, Parent = swatchRow,
 	})
 	corner(sw, UDim.new(1, 0))
-	stroke(sw, Color3.new(1, 1, 1), 1.5, 0.6)
+	stroke(sw, WHITE, 1.5, 0.6)
+	local sc = new("UIScale", { Parent = sw })
+	sw.InputBegan:Connect(function(i) if isPress(i) then tween(sc, 0.08, { Scale = 0.85 }) end end)
+	sw.InputEnded:Connect(function(i) if isPress(i) then tween(sc, 0.25, { Scale = 1 }, Enum.EasingStyle.Back) end end)
 	sw.Activated:Connect(function() setAccent(col) end)
 end
 
+Section(pageSet, "أدوات")
 Button(pageSet, "🔄 إعادة ضبط كل الميزات", Theme.off, function()
 	speedToggle.Set(false)
 	jumpToggle.Set(false)
 	flyToggle.Set(false)
 	autoToggle.Set(false)
+	tourRunning = false
+	setTourUI(false)
 	notify("تمت إعادة الضبط", "success")
 end)
 
@@ -878,29 +1265,43 @@ local mini, miniDrag = FloatButton("✨", 44)
 
 local function setMinimized(v)
 	if v then
-		local p, s = Main.AbsolutePosition, Main.AbsoluteSize
+		local p, s = Shell.AbsolutePosition, Shell.AbsoluteSize
 		mini.Position = UDim2.fromOffset(p.X + s.X - 44, p.Y)
-		Main.Visible = false
+		tween(Main, 0.18, { GroupTransparency = 1 })
+		tween(borderStroke, 0.18, { Transparency = 1 })
+		task.wait(0.18)
+		Shell.Visible = false
 		mini.Visible = true
 	else
 		mini.Visible = false
-		Main.Visible = true
+		Shell.Visible = true
 		local w, h = winSize()
-		Main.Size = UDim2.fromOffset(w * 0.9, h * 0.9)
+		Shell.Size = UDim2.fromOffset(w * 0.9, h * 0.9)
 		Main.GroupTransparency = 1
-		tween(Main, 0.3, { Size = UDim2.fromOffset(w, h), GroupTransparency = 0 }, Enum.EasingStyle.Back)
+		tween(Shell, 0.35, { Size = UDim2.fromOffset(w, h) }, Enum.EasingStyle.Back)
+		tween(Main, 0.3, { GroupTransparency = 0 })
+		tween(borderStroke, 0.3, { Transparency = 0 })
 	end
 end
 
-MinBtn.Activated:Connect(function() setMinimized(true) end)
+MinBtn.Activated:Connect(function() task.spawn(setMinimized, true) end)
 mini.Activated:Connect(function()
 	if miniDrag.moved then return end
 	setMinimized(false)
 end)
 
+-- اختصار الكيبورد (للكمبيوتر)
+track(UserInputService.InputBegan:Connect(function(i, gp)
+	if gp then return end
+	if i.KeyCode == Enum.KeyCode.RightShift then
+		task.spawn(setMinimized, Shell.Visible)
+	end
+end))
+
 local function destroyAll()
 	State.running = false
 	State.flying = false
+	tourRunning = false
 	pcall(function()
 		local root, hum = getRoot(), getHum()
 		if root then
@@ -914,6 +1315,7 @@ local function destroyAll()
 		end
 	end)
 	for _, c in ipairs(Conns) do pcall(function() c:Disconnect() end) end
+	for _, t in ipairs(Loops) do pcall(function() t:Cancel() end) end
 	gui:Destroy()
 end
 
@@ -962,15 +1364,18 @@ track(localPlayer.CharacterAdded:Connect(function()
 end))
 
 track(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
-	if Main.Visible then
+	if Shell.Visible then
 		local w, h = winSize()
-		Main.Size = UDim2.fromOffset(w, h)
+		Shell.Size = UDim2.fromOffset(w, h)
 	end
 end))
 
 -- ==========================================
--- التشغيل
+-- التشغيل (أنيميشن الدخول)
 -- ==========================================
-selectTab(tabs[1])
-tween(Main, 0.4, { Size = UDim2.fromOffset(W, H), GroupTransparency = 0 }, Enum.EasingStyle.Back)
-task.delay(0.5, function() notify("تم تحميل Premium Hub ✨", "success") end)
+RunService.Heartbeat:Wait() -- ننتظر فريم حتى يحسب الـ Layout المواقع
+selectTab(tabs[1], true)
+tween(Shell, 0.45, { Size = UDim2.fromOffset(W, H) }, Enum.EasingStyle.Back)
+tween(Main, 0.35, { GroupTransparency = 0 })
+tween(borderStroke, 0.4, { Transparency = 0 })
+task.delay(0.55, function() notify("تم تحميل Premium Hub ✨", "success") end)
